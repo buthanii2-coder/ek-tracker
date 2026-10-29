@@ -125,7 +125,7 @@ footer{font-size:12px;color:var(--muted)}
   </div>
 
   <div class="links" id="links"></div>
-  <footer>المصادر: adsb.lol ثم adsb.fi ثم airplanes.live (مواقع حيّة مجانية) + adsbdb.com و hexdb.io (مسار الرحلة). الرحلة تظهر فقط وهي في الجو وضمن تغطية أجهزة الاستقبال؛ فوق المحيطات قد تختفي مؤقتاً.</footer>
+  <footer>مصادر الموقع الحي: adsb.lol · adsb.fi · airplanes.live · adsb.one · OpenSky (مجانية، يجرّبها بالترتيب) + adsbdb.com و hexdb.io (مسار الرحلة). الرحلة تظهر فقط وهي في الجو وضمن تغطية أجهزة الاستقبال؛ فوق المحيطات قد تختفي مؤقتاً.</footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -136,7 +136,7 @@ const chips=$("chips");
 PICKS.forEach(([f,c])=>{const b=document.createElement("button");b.type="button";b.className="chip";b.innerHTML=`<b>${f}</b> ${c}`;b.onclick=()=>{$("q").value=f;start(f)};chips.appendChild(b)});
 
 const map=L.map("map",{worldCopyJump:true}).setView([25.25,55.36],4);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{attribution:"© OpenStreetMap · © CARTO",maxZoom:12}).addTo(map);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap",maxZoom:12}).addTo(map);
 let marker,trail,routeLine,apts=[],path=[],timer,route=null,cur="";
 
 function toCallsign(s){s=s.trim().toUpperCase().replace(/\s+/g,"");
@@ -146,11 +146,35 @@ function hav(a,b,c,d){const R=6371,r=x=>x*Math.PI/180,dl=r(c-a),dn=r(d-b);const 
 const fmt=n=>Math.round(n).toLocaleString("en-US");
 function status(t,k=""){const s=$("st");s.textContent=t;s.className="status "+k}
 
-async function getJSON(u){const r=await fetch(u,{cache:"no-store"});if(!r.ok)throw new Error(r.status);return r.json()}
+async function getJSON(u){const c=new AbortController();const t=setTimeout(()=>c.abort(),9000);
+  try{const r=await fetch(u,{cache:"no-store",signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.json()}finally{clearTimeout(t)}}
+const readsb=j=>{if(!j||!Array.isArray(j.ac))throw new Error("bad");const a=j.ac.filter(x=>x.lat!=null);return a.length?a[0]:null};
+let lastLL=null;
+function osky(cs){ // OpenSky: no callsign filter, so use a box around the last position (cheaper) or the whole world
+  let q="";if(lastLL){const[la,lo]=lastLL;q=`?lamin=${la-6}&lamax=${la+6}&lomin=${lo-6}&lomax=${lo+6}`}
+  return getJSON("https://opensky-network.org/api/states/all"+q).then(j=>{
+    if(!j||!("states"in j))throw new Error("bad");
+    const s=(j.states||[]).find(x=>(x[1]||"").trim()===cs);if(!s||s[6]==null)return null;
+    return{flight:s[1],hex:s[0],lat:s[6],lon:s[5],alt_baro:s[8]?"ground":(s[7]||s[13]||0)/0.3048,gs:(s[9]||0)*1.94384,
+      track:s[10],baro_rate:s[11]==null?null:s[11]*196.85,squawk:s[14],seen_pos:j.time&&s[3]?Math.max(0,j.time-s[3]):null}});
+}
+const viaProxy=u=>[`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,`https://corsproxy.io/?url=${encodeURIComponent(u)}`];
+const SOURCES=[
+  {n:"adsb.lol",f:cs=>getJSON(`https://api.adsb.lol/v2/callsign/${cs}`).then(readsb)},
+  {n:"adsb.fi",f:cs=>getJSON(`https://opendata.adsb.fi/api/v2/callsign/${cs}`).then(readsb)},
+  {n:"airplanes.live",f:cs=>getJSON(`https://api.airplanes.live/v2/callsign/${cs}`).then(readsb)},
+  {n:"adsb.one",f:cs=>getJSON(`https://api.adsb.one/v2/callsign/${cs}`).then(readsb)},
+  {n:"OpenSky",f:osky},
+  {n:"adsb.lol (relay)",f:cs=>getJSON(viaProxy(`https://api.adsb.lol/v2/callsign/${cs}`)[0]).then(readsb)},
+  {n:"airplanes.live (relay)",f:cs=>getJSON(viaProxy(`https://api.airplanes.live/v2/callsign/${cs}`)[1]).then(readsb)},
+];
+let goodSrc=null,srcName="";
 async function live(cs){
-  for(const u of[`https://api.adsb.lol/v2/callsign/${cs}`,`https://opendata.adsb.fi/api/v2/callsign/${cs}`,`https://api.airplanes.live/v2/callsign/${cs}`]){
-    try{const j=await getJSON(u);const ac=(j.ac||[]).filter(a=>a.lat!=null);if(ac.length)return ac[0];if(j.ac)return null;}catch(e){}
+  const order=goodSrc?[goodSrc,...SOURCES.filter(s=>s!==goodSrc)]:SOURCES;let answered=false;
+  for(const s of order){
+    try{const a=await s.f(cs);answered=true;goodSrc=s;srcName=s.n;if(a){lastLL=[a.lat,a.lon];return a}}catch(e){}
   }
+  if(answered)return null;
   throw new Error("net");
 }
 async function getRoute(cs){
@@ -193,11 +217,11 @@ function render(a){
 async function tick(){
   try{const a=await live(cur);
     if(!a){status("الرحلة غير ظاهرة في الجو الآن (لم تقلع بعد، هبطت، أو خارج التغطية). سأحاول مجدداً.","err");return}
-    render(a);status("متصل · آخر تحديث "+new Date().toLocaleTimeString("en-GB"),"ok");
-  }catch(e){status("تعذّر الاتصال بكل المصادر (adsb.lol · adsb.fi · airplanes.live). إذا كانت الصفحة مفتوحة داخل Claude فهي تحجب الاتصال الخارجي؛ افتح الملف من Safari أو Chrome.","err")}
+    render(a);status(`متصل عبر ${srcName} · آخر تحديث `+new Date().toLocaleTimeString("en-GB"),"ok");
+  }catch(e){status("تعذّر الوصول لكل مصادر الموقع الحي (7 مصادر). سأعيد المحاولة تلقائياً.","err")}
 }
 async function start(input){
-  clearInterval(timer);cur=toCallsign(input);if(!cur)return;path=[];
+  clearInterval(timer);cur=toCallsign(input);if(!cur)return;path=[];lastLL=null;
   if(marker){map.removeLayer(marker);marker=null}
   status("جاري البحث عن "+cur+" …");
   route=await getRoute(cur);
@@ -208,7 +232,7 @@ async function start(input){
   }else{$("rt").textContent=ek;$("cities").textContent="المسار غير متوفر";$("al").textContent="EMIRATES";drawRoute()}
   $("links").innerHTML=`<a href="https://www.flightradar24.com/data/flights/${ek.toLowerCase()}" target="_blank" rel="noopener">افتحها في Flightradar24 ↗</a><a href="https://globe.adsb.lol/?callsign=${cur}" target="_blank" rel="noopener">adsb.lol ↗</a>`;
   try{localStorage.setItem("ekLast",ek)}catch(e){}
-  await tick();timer=setInterval(tick,15000);
+  await tick();timer=setInterval(tick,srcName==="OpenSky"?30000:15000);
 }
 $("f").addEventListener("submit",e=>{e.preventDefault();start($("q").value)});
 setInterval(()=>{$("clock").textContent=new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})},1000);
