@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>متتبع رحلات الإمارات</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=Archivo+Black&display=swap">
+<style>
+/* Layout: one "cube" display card on top, live map below, quick-pick flights */
+:root{
+  --bg:#f3f1ee; --panel:#fbfaf8; --fg:#1d1a18; --muted:#7a716b; --line:#ddd6cf;
+  --red:#c8102e; --gold:#b08a3e; --ok:#1f7a4d;
+  --display:"Archivo Black",system-ui,sans-serif;
+  --body:"IBM Plex Sans Arabic",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root{--bg:#141210;--panel:#1d1a17;--fg:#f1ece6;--muted:#9b928a;--line:#332e29;--red:#e8334d;--gold:#d2ab5c;--ok:#4fbf86;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-top:max(16px,env(safe-area-inset-top,0px));padding-bottom:max(24px,env(safe-area-inset-bottom,0px))}
+.wrap{max-width:760px;margin:0 auto;display:grid;gap:16px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{margin:0;font-size:20px;font-weight:700}
+.sub{color:var(--muted);font-size:13px}
+form{display:flex;gap:8px}
+input{flex:1;min-width:0;font:600 18px var(--mono);direction:ltr;text-transform:uppercase;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg)}
+input:focus,button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+button{font:600 15px var(--body);padding:12px 18px;border:0;border-radius:10px;background:var(--red);color:#fff;cursor:pointer}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:transparent;color:var(--fg);border:1px solid var(--line);padding:6px 10px;font:12px var(--mono);border-radius:999px}
+.chip b{font-weight:600}
+/* the cube */
+.cube{background:#151515;border-radius:28px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
+.screen{background:#e9e7e2;color:#1b1b1b;border-radius:6px;overflow:hidden;font-family:var(--mono)}
+.sky{position:relative;height:150px;background:linear-gradient(#cfdbe6,#e9e7e2)}
+.sky svg{position:absolute;inset:0;width:100%;height:100%}
+.live{position:absolute;top:8px;left:10px;font-size:10px;letter-spacing:.12em;color:#555;direction:ltr}
+.live i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#c8102e;margin-right:5px;animation:p 1.4s infinite}
+@keyframes p{50%{opacity:.25}}
+.info{border-top:1.5px solid #1b1b1b;padding:10px 14px 14px;text-align:center;direction:ltr}
+.al{font-size:11px;letter-spacing:.25em;color:#444}
+.route{font:28px/1.1 var(--display);margin:4px 0;letter-spacing:.02em}
+.city{font-size:11px;color:#555}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:10px;font-size:12px;font-variant-numeric:tabular-nums}
+.stats div span{display:block;font-size:9px;letter-spacing:.12em;color:#777}
+.bar{height:4px;background:#cfcac2;margin-top:12px;border-radius:2px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:#c8102e;transition:width .8s}
+.togo{font-size:11px;color:#444;margin-top:5px;display:flex;justify-content:space-between}
+#map{height:340px;border-radius:14px;border:1px solid var(--line);z-index:0}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.meta div{background:var(--panel);padding:10px 12px}
+.meta span{display:block;font-size:11px;color:var(--muted)}
+.meta b{font:600 14px var(--mono);direction:ltr;display:inline-block}
+.status{font-size:13px;color:var(--muted);min-height:1.4em}
+.status.err{color:var(--red)}
+.status.ok{color:var(--ok)}
+a{color:var(--red)}
+.links{display:flex;gap:14px;flex-wrap:wrap;font-size:13px}
+.plane-ico{font-size:22px;line-height:1;color:var(--red);text-shadow:0 0 3px #fff}
+footer{font-size:12px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.live i{animation:none}.bar>i{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>متتبع رحلات طيران الإمارات</h1>
+    <span class="sub">بيانات ADS-B مباشرة · تحديث كل 15 ثانية</span>
+  </header>
+
+  <form id="f">
+    <input id="q" placeholder="EK1" autocomplete="off" aria-label="رقم الرحلة">
+    <button type="submit">تتبّع</button>
+  </form>
+  <div class="chips" id="chips"></div>
+  <div class="status" id="st">اكتب رقم الرحلة (مثل EK1 أو EK201) أو اختر من الأعلى.</div>
+
+  <div class="cube">
+    <div class="screen">
+      <div class="sky">
+        <span class="live"><i></i>LIVE · <span id="clock">--:--</span></span>
+        <svg viewBox="0 0 400 150" aria-hidden="true">
+          <circle cx="330" cy="38" r="20" fill="#f2c14e" opacity=".8"/>
+          <g id="plane" transform="translate(200 82)">
+            <rect x="-120" y="-10" width="220" height="22" rx="11" fill="#fff" stroke="#222" stroke-width="1.4"/>
+            <path d="M-120 1 q-14 0 -14 0 q4 -11 18 -11z" fill="#fff" stroke="#222" stroke-width="1.4"/>
+            <rect x="-90" y="-4" width="110" height="5" fill="#b08a3e"/>
+            <g fill="#222"><circle cx="-100" cy="-2" r="1.6"/><circle cx="-94" cy="-2" r="1.6"/></g>
+            <path d="M-20 6 l55 26 h14 l-30 -26z" fill="#ddd" stroke="#222" stroke-width="1.2"/>
+            <rect x="-6" y="18" width="34" height="12" rx="5" fill="#fff" stroke="#222" stroke-width="1.2"/>
+            <path d="M70 -10 L104 -52 h14 L100 -10z" fill="#fff" stroke="#222" stroke-width="1.4"/>
+            <path d="M104 -52 h14 l-4 9 h-16z" fill="#00732f"/><path d="M98 -43 h16 l-4 9 h-16z" fill="#fff"/><path d="M92 -34 h16 l-4 9 h-16z" fill="#111"/>
+            <path d="M104 -52 L84 -10 h-8 L100 -52z" fill="#c8102e"/>
+            <text x="20" y="-15" font-size="9" fill="#333" font-family="IBM Plex Mono,monospace">EMIRATES</text>
+          </g>
+        </svg>
+      </div>
+      <div class="info">
+        <div class="al" id="al">EMIRATES</div>
+        <div class="route" id="rt">DXB → ???</div>
+        <div class="city" id="cities">—</div>
+        <div class="stats">
+          <div><span>ALTITUDE</span><b id="alt">—</b></div>
+          <div><span>SPEED</span><b id="spd">—</b></div>
+          <div><span>V/S</span><b id="vs">—</b></div>
+        </div>
+        <div class="bar"><i id="prog"></i></div>
+        <div class="togo"><span id="flown">—</span><span id="left">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="meta">
+    <div><span>التسجيل</span><b id="reg">—</b></div>
+    <div><span>الطائرة</span><b id="type">—</b></div>
+    <div><span>Callsign</span><b id="cs">—</b></div>
+    <div><span>الموقع</span><b id="pos">—</b></div>
+    <div><span>Squawk</span><b id="sq">—</b></div>
+    <div><span>آخر إشارة</span><b id="seen">—</b></div>
+  </div>
+
+  <div class="links" id="links"></div>
+  <footer>المصادر: adsb.lol ثم adsb.fi ثم airplanes.live (مواقع حيّة مجانية) + adsbdb.com و hexdb.io (مسار الرحلة). الرحلة تظهر فقط وهي في الجو وضمن تغطية أجهزة الاستقبال؛ فوق المحيطات قد تختفي مؤقتاً.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const PICKS=[["EK1","لندن"],["EK201","نيويورك"],["EK215","لوس أنجلوس"],["EK73","باريس"],["EK45","فرانكفورت"],["EK318","طوكيو"],["EK412","سيدني"],["EK2","من لندن"]];
+const $=id=>document.getElementById(id);
+const chips=$("chips");
+PICKS.forEach(([f,c])=>{const b=document.createElement("button");b.type="button";b.className="chip";b.innerHTML=`<b>${f}</b> ${c}`;b.onclick=()=>{$("q").value=f;start(f)};chips.appendChild(b)});
+
+const map=L.map("map",{worldCopyJump:true}).setView([25.25,55.36],4);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{attribution:"© OpenStreetMap · © CARTO",maxZoom:12}).addTo(map);
+let marker,trail,routeLine,apts=[],path=[],timer,route=null,cur="";
+
+function toCallsign(s){s=s.trim().toUpperCase().replace(/\s+/g,"");
+  if(/^EK\d/.test(s))return "UAE"+s.slice(2).replace(/^0+/,"");
+  if(/^UAE/.test(s))return s; if(/^\d+$/.test(s))return "UAE"+s.replace(/^0+/,""); return s;}
+function hav(a,b,c,d){const R=6371,r=x=>x*Math.PI/180,dl=r(c-a),dn=r(d-b);const h=Math.sin(dl/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
+const fmt=n=>Math.round(n).toLocaleString("en-US");
+function status(t,k=""){const s=$("st");s.textContent=t;s.className="status "+k}
+
+async function getJSON(u){const r=await fetch(u,{cache:"no-store"});if(!r.ok)throw new Error(r.status);return r.json()}
+async function live(cs){
+  for(const u of[`https://api.adsb.lol/v2/callsign/${cs}`,`https://opendata.adsb.fi/api/v2/callsign/${cs}`,`https://api.airplanes.live/v2/callsign/${cs}`]){
+    try{const j=await getJSON(u);const ac=(j.ac||[]).filter(a=>a.lat!=null);if(ac.length)return ac[0];if(j.ac)return null;}catch(e){}
+  }
+  throw new Error("net");
+}
+async function getRoute(cs){
+  try{const j=await getJSON(`https://api.adsbdb.com/v0/callsign/${cs}`);const fr=j.response&&j.response.flightroute;if(fr)return fr}catch(e){}
+  // fallback: hexdb.io (route as "OMDB-EGLL", then airport coordinates)
+  try{const r=await fetch(`https://hexdb.io/callsign-route?callsign=${cs}`);const t=(await r.text()).trim();
+    const [o,d]=t.split("-");if(!o||!d||o.length!==4)return null;
+    const ap=async c=>{const a=await getJSON(`https://hexdb.io/api/v1/airport/icao/${c}`);return{iata_code:a.iata||c,municipality:a.region_name||a.airport,latitude:+a.latitude,longitude:+a.longitude}};
+    return{origin:await ap(o),destination:await ap(d)};
+  }catch(e){return null}
+}
+
+function drawRoute(){
+  apts.forEach(m=>map.removeLayer(m));apts=[];if(routeLine)map.removeLayer(routeLine);
+  if(!route)return;const o=route.origin,d=route.destination;
+  routeLine=L.polyline([[o.latitude,o.longitude],[d.latitude,d.longitude]],{color:"#b08a3e",weight:2,dashArray:"6 6"}).addTo(map);
+  [o,d].forEach(a=>apts.push(L.circleMarker([a.latitude,a.longitude],{radius:5,color:"#c8102e",fillOpacity:1}).bindTooltip(a.iata_code,{permanent:true,direction:"top"}).addTo(map)));
+}
+
+function render(a){
+  const altFt=a.alt_baro==="ground"?0:(a.alt_baro||a.alt_geom||0), kts=a.gs||0;
+  $("alt").textContent=a.alt_baro==="ground"?"على الأرض":`${fmt(altFt)} ft · ${fmt(altFt*0.3048)} m`;
+  $("spd").textContent=`${fmt(kts*1.852)} km/h`;
+  const vr=a.baro_rate??a.geom_rate; $("vs").textContent=vr==null?"—":(vr>300?"↑ ":vr<-300?"↓ ":"→ ")+fmt(Math.abs(vr))+" fpm";
+  $("reg").textContent=a.r||"—";$("type").textContent=(a.t||"—")+(a.desc?` · ${a.desc}`:"");
+  $("cs").textContent=(a.flight||"").trim();$("pos").textContent=`${a.lat.toFixed(3)}, ${a.lon.toFixed(3)}`;
+  $("sq").textContent=a.squawk||"—";$("seen").textContent=a.seen_pos!=null?`قبل ${Math.round(a.seen_pos)} ث`:"الآن";
+  if(route){const o=route.origin,d=route.destination;
+    const tot=hav(o.latitude,o.longitude,d.latitude,d.longitude),left=hav(a.lat,a.lon,d.latitude,d.longitude);
+    const pct=Math.max(0,Math.min(100,100*(1-left/tot)));
+    $("prog").style.width=pct+"%";$("flown").textContent=`${fmt(tot-left>0?tot-left:0)} km flown`;
+    $("left").textContent=`${fmt(left)} km to go`+(kts>50?` · ~${Math.floor(left/(kts*1.852))}h${String(Math.round(left/(kts*1.852)%1*60)).padStart(2,"0")}`:"");
+  }
+  const ll=[a.lat,a.lon];path.push(ll);
+  const icon=L.divIcon({className:"",html:`<div class="plane-ico" style="transform:rotate(${(a.track||0)-90}deg)">✈</div>`,iconSize:[22,22],iconAnchor:[11,11]});
+  if(!marker){marker=L.marker(ll,{icon}).addTo(map);map.setView(ll,5)}else{marker.setLatLng(ll).setIcon(icon)}
+  if(trail)map.removeLayer(trail);trail=L.polyline(path,{color:"#c8102e",weight:3}).addTo(map);
+}
+
+async function tick(){
+  try{const a=await live(cur);
+    if(!a){status("الرحلة غير ظاهرة في الجو الآن (لم تقلع بعد، هبطت، أو خارج التغطية). سأحاول مجدداً.","err");return}
+    render(a);status("متصل · آخر تحديث "+new Date().toLocaleTimeString("en-GB"),"ok");
+  }catch(e){status("تعذّر الاتصال بكل المصادر (adsb.lol · adsb.fi · airplanes.live). إذا كانت الصفحة مفتوحة داخل Claude فهي تحجب الاتصال الخارجي؛ افتح الملف من Safari أو Chrome.","err")}
+}
+async function start(input){
+  clearInterval(timer);cur=toCallsign(input);if(!cur)return;path=[];
+  if(marker){map.removeLayer(marker);marker=null}
+  status("جاري البحث عن "+cur+" …");
+  route=await getRoute(cur);
+  const ek=input.trim().toUpperCase().startsWith("EK")?input.trim().toUpperCase():"EK"+cur.replace(/^UAE/,"");
+  if(route){const o=route.origin,d=route.destination;
+    $("rt").textContent=`${o.iata_code} → ${d.iata_code}`;$("cities").textContent=`${o.municipality} → ${d.municipality}`;
+    $("al").textContent=`EMIRATES · ${ek}`;drawRoute();
+  }else{$("rt").textContent=ek;$("cities").textContent="المسار غير متوفر";$("al").textContent="EMIRATES";drawRoute()}
+  $("links").innerHTML=`<a href="https://www.flightradar24.com/data/flights/${ek.toLowerCase()}" target="_blank" rel="noopener">افتحها في Flightradar24 ↗</a><a href="https://globe.adsb.lol/?callsign=${cur}" target="_blank" rel="noopener">adsb.lol ↗</a>`;
+  try{localStorage.setItem("ekLast",ek)}catch(e){}
+  await tick();timer=setInterval(tick,15000);
+}
+$("f").addEventListener("submit",e=>{e.preventDefault();start($("q").value)});
+setInterval(()=>{$("clock").textContent=new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})},1000);
+let last="EK1";try{last=localStorage.getItem("ekLast")||"EK1"}catch(e){}
+$("q").value=last;start(last);
+</script>
+</body>
+</html>
